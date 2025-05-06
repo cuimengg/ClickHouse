@@ -7,6 +7,7 @@ import time
 import traceback
 from pathlib import Path
 
+from ci.jobs.scripts.cidb_cluster import CIDBCluster
 from ci.praktika.info import Info
 from ci.praktika.result import Result
 from ci.praktika.utils import MetaClasses, Shell, Utils
@@ -18,6 +19,43 @@ perf_right = f"{perf_wd}/right"
 perf_left = f"{perf_wd}/left"
 perf_right_config = f"{perf_right}/config"
 perf_left_config = f"{perf_left}/config"
+
+GET_HISTORICAL_TRESHOLDS_QUERY = """
+select test, query_index,
+    quantileExact(0.99)(abs(diff)) * 1.5 AS max_diff,
+    quantileExactIf(0.99)(stat_threshold, abs(diff) < stat_threshold) * 1.5 AS max_stat_threshold,
+    query_display_name
+from query_metrics_v2
+-- We use results at least one week in the past, so that the current
+-- changes do not immediately influence the statistics, and we have
+-- some time to notice that something is wrong.
+where event_date between now() - interval 10 month - interval 1 week
+    and now() - interval 1 week
+    and metric = 'client_time'
+    and pr_number = 0
+group by test, query_index, query_display_name
+having count(*) > 100
+"""
+
+# Precision is going to be 1.5 times worse for PRs, because we run the queries
+# less times. How do I know it? I ran this:
+# SELECT quantilesExact(0., 0.1, 0.5, 0.75, 0.95, 1.)(p / m)
+# FROM
+# (
+#     SELECT
+#         quantileIf(0.95)(stat_threshold, pr_number = 0) AS m,
+#         quantileIf(0.95)(stat_threshold, (pr_number != 0) AND (abs(diff) < stat_threshold)) AS p
+#     FROM query_metrics_v2
+#     WHERE (event_date > (today() - toIntervalMonth(1))) AND (metric = 'client_time')
+#     GROUP BY
+#         test,
+#         query_index,
+#         query_display_name
+#     HAVING count(*) > 100
+# )
+#
+# The file can be empty if the server is inaccessible, so we can't use
+# TSVWithNamesAndTypes.
 
 
 class JobStages(metaclass=MetaClasses.WithIter):
@@ -312,6 +350,22 @@ def main():
     # ulimit -c unlimited
     # cat /proc/sys/kernel/core_pattern
 
+    if res:
+
+        def prepare_historical_data():
+            cidb = CIDBCluster()
+            assert cidb.is_ready()
+            result = cidb.do_select_query(query=GET_HISTORICAL_TRESHOLDS_QUERY)
+            with open("./ci/tmp/historical-thresholds.tsv", "w", encoding="utf-8") as f:
+                f.write(result)
+
+        results.append(
+            Result.from_commands_run(
+                name="Get Historical Data", command=prepare_historical_data
+            )
+        )
+        res = results[-1].is_ok()
+
     if res and JobStages.INSTALL_CLICKHOUSE in stages:
         print("Install ClickHouse")
         commands = [
@@ -592,6 +646,29 @@ def main():
                 name="Check Results", status=status, info=message, duration=sw.duration
             )
         )
+
+    # TODO: UPLOAD query metrics
+    #     "${client[@]}" --query "
+    #     insert into query_metrics_v2
+    #     select
+    #     toDate(event_time) event_date,
+    #     toDateTime('$(git -C right/ch log -1 --format=%cd --date=iso "$SHA_TO_TEST" | cut -d' ' -f-2)') event_time,
+    #     $PR_TO_TEST pr_number,
+    #     '$REF_SHA' old_sha,
+    #     '$SHA_TO_TEST' new_sha,
+    #     test,
+    #     query_index,
+    #     query_display_name,
+    #     metric_name as metric,
+    #     old_value,
+    #     new_value,
+    #     diff,
+    #     stat_threshold
+    # from input('metric_name text, old_value float, new_value float, diff float,
+    # ratio_display_text text, stat_threshold float,
+    # test text, query_index int, query_display_name text')
+    # format TSV
+    # " < report/all-query-metrics.tsv # Don't leave whitespace after INSERT: https://github.com/ClickHouse/ClickHouse/issues/16652
 
     # dmesg -T > dmesg.log
     #
