@@ -664,7 +664,7 @@ create table report_thresholds engine File(TSVWithNamesAndTypes, 'report/thresho
             test_thresholds.report_threshold + 0.1), 2) unstable_threshold,
         query_display_names.query_display_name query_display_name
     from query_display_names
-    left join file('./ci/tmp/historical-thresholds.tsv', TSV,
+    left join file('./historical-thresholds.tsv', TSV,
         'test text, query_index int, max_diff float, max_stat_threshold float,
             query_display_name text') historical_thresholds
     on query_display_names.test = historical_thresholds.test

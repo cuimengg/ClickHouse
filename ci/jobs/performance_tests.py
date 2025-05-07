@@ -350,22 +350,6 @@ def main():
     # ulimit -c unlimited
     # cat /proc/sys/kernel/core_pattern
 
-    if res:
-
-        def prepare_historical_data():
-            cidb = CIDBCluster()
-            assert cidb.is_ready()
-            result = cidb.do_select_query(query=GET_HISTORICAL_TRESHOLDS_QUERY)
-            with open("./ci/tmp/historical-thresholds.tsv", "w", encoding="utf-8") as f:
-                f.write(result)
-
-        results.append(
-            Result.from_commands_run(
-                name="Get Historical Data", command=prepare_historical_data
-            )
-        )
-        res = results[-1].is_ok()
-
     if res and JobStages.INSTALL_CLICKHOUSE in stages:
         print("Install ClickHouse")
         commands = [
@@ -409,6 +393,21 @@ def main():
             )
             res = results[-1].is_ok()
             Shell.check(f"touch {perf_left}/.done")
+
+    if res:
+        def prepare_historical_data():
+            cidb = CIDBCluster()
+            assert cidb.is_ready()
+            result = cidb.do_select_query(query=GET_HISTORICAL_TRESHOLDS_QUERY)
+            with open(f"{perf_wd}/historical-thresholds.tsv", "w", encoding="utf-8") as f:
+                f.write(result)
+
+        results.append(
+            Result.from_commands_run(
+                name="Get Historical Data", command=prepare_historical_data
+            )
+        )
+        res = results[-1].is_ok()
 
     if res and JobStages.DOWNLOAD_DATASETS in stages:
         print("Download datasets")
